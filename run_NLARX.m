@@ -3,16 +3,18 @@ clear; clc; close all;
 rng(1);
 
 addpath(genpath('./'));
+
 %% =========================
 % Select example generator
 %% =========================
 % exampleFcn = @generate_toy_nonlinear_example;
 % exampleFcn = @generate_linear_msd_example;
-% exampleFcn = @generate_nonlinear_msd_example;
+exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_frigola_benchmark_example;
-% exampleFcn = @generate_linear_mimo3_example;   % <- MIMO example
-% exampleFcn = @generate_linear_mimo3_PID_example;   % <- MIMO example
-exampleFcn = @generate_nonlinear_twotank_example;
+% exampleFcn = @generate_linear_mimo3_example;
+% exampleFcn = @generate_linear_mimo3_PID_example;
+% exampleFcn = @generate_nonlinear_twotank_example;
+
 %% =========================
 % Generate data
 %% =========================
@@ -47,19 +49,27 @@ z = iddata(y, u, Ts);
 if isfield(data, 'uEst') && isfield(data, 'yEst') && isfield(data, 'uVal') && isfield(data, 'yVal')
     zEst = iddata(data.yEst, data.uEst, Ts);
     zVal = iddata(data.yVal, data.uVal, Ts);
-    tVal = data.t(data.idxVal);
+
+    if isfield(data, 'idxVal')
+        tVal = data.t(data.idxVal);
+    else
+        tVal = t(size(data.uEst,1)+1:end);
+    end
+
 elseif isfield(data, 'idxVal')
     idxVal = data.idxVal(:);
     NtrOriginal = idxVal(1) - 1;
     zEst = z(1:NtrOriginal);
     zVal = z(NtrOriginal+1:end);
     tVal = t(NtrOriginal+1:end);
+
 elseif isfield(data, 'idxTe')
     idxTe = data.idxTe(:);
     NtrOriginal = idxTe(1) - 1;
     zEst = z(1:NtrOriginal);
     zVal = z(NtrOriginal+1:end);
     tVal = t(NtrOriginal+1:end);
+
 else
     NtrOriginal = round(0.7 * N);
     zEst = z(1:NtrOriginal);
@@ -84,9 +94,9 @@ outputFcn = idWaveletNetwork;
 %% =========================
 % Estimation options
 %% =========================
-opt = nlarxOptions;
-opt.SearchOptions.MaxIterations = 50;
-opt.Focus = 'simulation';
+optNL = nlarxOptions;
+optNL.SearchOptions.MaxIterations = 50;
+optNL.Focus = 'simulation';
 
 %% =========================
 % Estimate NLARX model
@@ -97,7 +107,7 @@ opt.Focus = 'simulation';
 %   nk : ny-by-nu
 % For SISO:
 %   scalars are also fine
-sysNLARX = nlarx(zEst, [na nb nk], outputFcn, opt);
+sysNLARX = nlarx(zEst, [na nb nk], outputFcn, optNL);
 
 %% =========================
 % One-step prediction on validation set
@@ -111,132 +121,75 @@ yTrue = zVal.OutputData;       % Nval x ny
 % Free-run simulation on validation set
 %% =========================
 x0 = findstates(sysNLARX, zVal);
-opt = simOptions;
-opt.InitialCondition = x0;
+optSim = simOptions;
+optSim.InitialCondition = x0;
 
-ySimObj = sim(sysNLARX, zVal, opt);
+ySimObj = sim(sysNLARX, zVal, optSim);
 ySim = ySimObj.OutputData;     % Nval x ny
 
 %% =========================
-% Metrics (per channel + average)
+% Common metrics
 %% =========================
-rmse1_each    = sqrt(mean((yTrue - yPred).^2, 1));
-rmseFree_each = sqrt(mean((yTrue - ySim ).^2, 1));
+metrics = compute_prediction_metrics(yTrue, yPred, ySim);
 
-fit1_each    = zeros(1, ny);
-fitFree_each = zeros(1, ny);
+rmse1_each    = metrics.rmse1_each;
+rmseFree_each = metrics.rmseFree_each;
+fit1_each     = metrics.fit1_each;
+fitFree_each  = metrics.fitFree_each;
 
-for j = 1:ny
-    denom1 = norm(yTrue(:,j) - mean(yTrue(:,j)));
-    if denom1 < 1e-12
-        fit1_each(j) = NaN;
-        fitFree_each(j) = NaN;
-    else
-        fit1_each(j)    = 100 * (1 - norm(yTrue(:,j) - yPred(:,j)) / denom1);
-        fitFree_each(j) = 100 * (1 - norm(yTrue(:,j) - ySim(:,j))  / denom1);
-    end
-end
-
-rmse1    = mean(rmse1_each, 'omitnan');
-rmseFree = mean(rmseFree_each, 'omitnan');
-fit1     = mean(fit1_each, 'omitnan');
-fitFree  = mean(fitFree_each, 'omitnan');
+rmse1    = metrics.rmse1;
+rmseFree = metrics.rmseFree;
+fit1     = metrics.fit1;
+fitFree  = metrics.fitFree;
 
 %% =========================
-% Plot measured outputs
+% Plot measured outputs (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(t, y(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    if j == 1
-        title(['Measured output - ', modelName]);
-    end
-end
+plot_measured_outputs(t, y, modelName);
 
 %% =========================
-% Plot one-step prediction
+% Plot one-step prediction (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tVal, yTrue(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tVal, yPred(:,j), 'r--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'NLARX one-step', 'Location', 'best');
-    title(sprintf('One-step | y_%d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmse1_each(j), fit1_each(j)));
-end
-sgtitle([modelName, ' | One-step prediction']);
+plot_estimation_result( ...
+    tVal, yTrue, yPred, ...
+    rmse1_each, fit1_each, ...
+    modelName, 'NLARX', ...
+    'One-step prediction', ...
+    sprintf('one-step (%s)', class(outputFcn)), ...
+    'r--');
 
 %% =========================
-% Plot free-run simulation
+% Plot free-run simulation (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tVal, yTrue(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tVal, ySim(:,j), 'b--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'NLARX free-run', 'Location', 'best');
-    title(sprintf('Free-run | y_%d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmseFree_each(j), fitFree_each(j)));
-end
-sgtitle([modelName, ' | Free-run simulation']);
+plot_estimation_result( ...
+    tVal, yTrue, ySim, ...
+    rmseFree_each, fitFree_each, ...
+    modelName, 'NLARX', ...
+    'Free-run simulation', ...
+    sprintf('free-run (%s)', class(outputFcn)), ...
+    'b--');
 
 %% =========================
-% Plot errors
+% Plot errors (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,2,2*j-1);
-    plot(tVal, yTrue(:,j) - yPred(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('e_{1step,%d}', j));
-    title(sprintf('One-step error | y_%d', j));
-
-    subplot(ny,2,2*j);
-    plot(tVal, yTrue(:,j) - ySim(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('e_{free,%d}', j));
-    title(sprintf('Free-run error | y_%d', j));
-end
+plot_estimation_errors(tVal, yTrue, yPred, ySim, modelName, 'NLARX');
 
 %% =========================
-% Compare plot
+% Optional: model info
 %% =========================
-figure('Color','w');
-compare(zVal, sysNLARX);
-grid on;
-title([modelName, ' - compare() result']);
+disp(sysNLARX);
 
 %% =========================
-% Print metrics
+% Print summary (common)
 %% =========================
-fprintf('\n');
-fprintf('Model              : %s\n', modelName);
-fprintf('NLARX type         : %s\n', class(outputFcn));
-fprintf('Number of inputs   : %d\n', nu);
-fprintf('Number of outputs  : %d\n', ny);
-fprintf('Mean One-step RMSE : %.6f\n', rmse1);
-fprintf('Mean One-step FIT  : %.2f %%\n', fit1);
-fprintf('Mean Free-run RMSE : %.6f\n', rmseFree);
-fprintf('Mean Free-run FIT  : %.2f %%\n', fitFree);
+algoName = 'NLARX';
+extraInfo = sprintf('NLARX type         : %s', class(outputFcn));
 
-for j = 1:ny
-    fprintf('  y_%d -> one-step RMSE %.6f, FIT %.2f %% | free-run RMSE %.6f, FIT %.2f %%\n', ...
-        j, rmse1_each(j), fit1_each(j), rmseFree_each(j), fitFree_each(j));
-end
-fprintf('\n');
+print_sysid_summary( ...
+    modelName, algoName, nu, ny, ...
+    rmse1, fit1, rmseFree, fitFree, ...
+    rmse1_each, fit1_each, rmseFree_each, fitFree_each, ...
+    extraInfo);
 
 %% Remove path
 rmpath(genpath('./'));
