@@ -9,7 +9,7 @@ rng(1);
 % Select example generator
 %% =========================
 % exampleFcn = @generate_frigola_benchmark_example;
-exampleFcn = @generate_linear_msd_example;
+% exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
 exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
@@ -38,36 +38,24 @@ ny = size(yRaw,2);
 nu = size(uRaw,2);
 
 %% =========================
-% Savitzky-Golay preprocessing
+% Output-only preprocessing
 %% =========================
 usePreprocessing = true;
+sgolayFrame_y    = 21;   % Must be odd
 
-sgolayFrame_u = 21;   % odd
-sgolayFrame_y = 21;   % odd
-
-u = uRaw;
-y = yRaw;
+u = uRaw;   % Input is NOT smoothed
+y = yRaw;   % Output may be smoothed below
 
 if usePreprocessing
-    for j = 1:nu
-        frameNow = min(sgolayFrame_u, N - mod(N+1,2));
-        if mod(frameNow,2) == 0
-            frameNow = frameNow - 1;
-        end
-        if frameNow < 3
-            error('Savitzky-Golay frame length for input is too short.');
-        end
-        u(:,j) = smoothdata(uRaw(:,j), 'sgolay', frameNow);
+    frameNow = min(sgolayFrame_y, N);
+    if mod(frameNow,2) == 0
+        frameNow = frameNow - 1;
+    end
+    if frameNow < 3
+        error('Savitzky-Golay frame length for output is too short.');
     end
 
     for j = 1:ny
-        frameNow = min(sgolayFrame_y, N - mod(N+1,2));
-        if mod(frameNow,2) == 0
-            frameNow = frameNow - 1;
-        end
-        if frameNow < 3
-            error('Savitzky-Golay frame length for output is too short.');
-        end
         y(:,j) = smoothdata(yRaw(:,j), 'sgolay', frameNow);
     end
 end
@@ -79,6 +67,7 @@ end
 
 %% =========================
 % Build NARX regressors
+% Regressors use raw input u and filtered/raw output y
 %% =========================
 [Xall, Yall, idxAll] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
 
@@ -105,8 +94,15 @@ end
 Xtr   = Xall(trainMask,:);
 Ytr   = Yall(trainMask,:);
 Xte   = Xall(testMask,:);
-Yte   = Yall(testMask,:);
+Yte   = Yall(testMask,:);         % Possibly preprocessed target
 idxTe = idxAll(testMask);
+
+if isempty(idxTe)
+    error('Test set is empty.');
+end
+
+% Raw targets for final evaluation and plotting
+YteRaw = yRaw(idxTe,:);
 
 %% =========================
 % Normalize
@@ -151,8 +147,9 @@ s2Te = s2TeN .* (stdY.^2);
 
 %% =========================
 % Free-run simulation
+% Rollout uses raw input u and filtered/raw output history y
 %% =========================
-yHatFree = nan(size(Yte));
+yHatFree = nan(size(Yte));   % Predicted output on original output scale
 testStartOriginalIndex = idxTe(1);
 
 for n = 1:size(Yte,1)
@@ -172,9 +169,9 @@ for n = 1:size(Yte,1)
 end
 
 %% =========================
-% Metrics
+% Metrics against RAW outputs
 %% =========================
-metrics = compute_prediction_metrics(Yte, muTe, yHatFree);
+metrics = compute_prediction_metrics(YteRaw, muTe, yHatFree);
 
 rmse1_each    = metrics.rmse1_each;
 fit1_each     = metrics.fit1_each;
@@ -192,35 +189,61 @@ fitFree  = metrics.fitFree;
 tTe = t(idxTe);
 
 if usePreprocessing
-    algoName = 'GP-NARX (Savitzky-Golay preprocessed)';
+    algoName = 'GP-NARX (y-only Savitzky-Golay preprocessing, metrics on raw y)';
 else
-    algoName = 'GP-NARX';
+    algoName = 'GP-NARX (metrics on raw y)';
 end
 
-plot_measured_outputs_with_preprocessed(t, yRaw, y, modelName);
+%% =========================
+% Plot measured outputs
+%% =========================
+if usePreprocessing
+    plot_measured_outputs_with_preprocessed(t, yRaw, y, modelName);
+else
+    plot_measured_outputs(t, yRaw, modelName);
+end
 
+%% =========================
+% Plot one-step prediction with raw target
+%% =========================
 plot_gp_prediction_with_band( ...
-    tTe, Yte, muTe, s2Te, ...
+    tTe, YteRaw, muTe, s2Te, ...
     rmse1_each, fit1_each, ...
-    modelName, algoName, 'One-step prediction');
+    modelName, algoName, 'One-step prediction (evaluated on raw output)');
 
+%% =========================
+% Plot free-run simulation with raw target
+%% =========================
 plot_estimation_result( ...
-    tTe, Yte, yHatFree, ...
+    tTe, YteRaw, yHatFree, ...
     rmseFree_each, fitFree_each, ...
     modelName, algoName, ...
-    'Free-run simulation', ...
+    'Free-run simulation (evaluated on raw output)', ...
     'free-run', ...
     'b--');
 
-plot_estimation_errors(tTe, Yte, muTe, yHatFree, modelName, algoName);
+%% =========================
+% Plot errors against raw target
+%% =========================
+plot_estimation_errors(tTe, YteRaw, muTe, yHatFree, modelName, algoName);
 
 %% =========================
 % Print summary
 %% =========================
-extraInfo = sprintf(['Regressor dimension : %d\n' ...
-                     'SG frame (input)    : %d\n' ...
-                     'SG frame (output)   : %d'], ...
-                     size(Xtr,2), sgolayFrame_u, sgolayFrame_y);
+if usePreprocessing
+    extraInfo = sprintf(['Regressor dimension : %d\n' ...
+                         'Input preprocessing : none\n' ...
+                         'Output preprocessing: Savitzky-Golay\n' ...
+                         'SG frame (output)   : %d\n' ...
+                         'Metrics target      : raw output'], ...
+                         size(Xtr,2), sgolayFrame_y);
+else
+    extraInfo = sprintf(['Regressor dimension : %d\n' ...
+                         'Input preprocessing : none\n' ...
+                         'Output preprocessing: none\n' ...
+                         'Metrics target      : raw output'], ...
+                         size(Xtr,2));
+end
 
 print_sysid_summary( ...
     modelName, algoName, nu, ny, ...
@@ -228,5 +251,5 @@ print_sysid_summary( ...
     rmse1_each, fit1_each, rmseFree_each, fitFree_each, ...
     extraInfo);
 
-%% remove path
+%% Remove path
 rmpath(genpath('./'));

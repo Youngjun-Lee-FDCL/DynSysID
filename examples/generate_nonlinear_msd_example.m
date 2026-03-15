@@ -20,7 +20,7 @@ function data = generate_nonlinear_msd_example()
     c3 = 0.4;
     k3 = 15.0;
 
-    sigmaY = 0.002;
+    sigmaY = 0.003;
 
     % simulate
     x = zeros(2,N);
