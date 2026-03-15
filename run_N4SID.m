@@ -261,16 +261,6 @@ for j = 1:ny
 end
 
 %% =========================
-% Compare plot
-%% =========================
-figure('Color','w');
-opt = compareOptions;
-opt.InitialCondition = 'estimate';
-compare(zVal, sysN4);
-grid on;
-title(sprintf('%s - compare() result (order=%d)', modelName, bestOrder));
-
-%% =========================
 % Optional: model info
 %% =========================
 disp(sysN4);
