@@ -7,17 +7,33 @@ classdef VGPSSMOptions
         % Inference
         numParticles (1,1) double = 200
         fixedLag (1,1) double = 5
+        localSmoothingBuffer (1,1) double = 10
+        useLocalWindow logical = true
 
         % Training
         maxIter (1,1) double = 100
         miniBatchLength (1,1) double = 200
-        localSmoothingBuffer (1,1) double = 10
 
         % Update schedule
         rhoInit (1,1) double = 0.8
         rhoFinalScale (1,1) double = 0.4
         gammaObs (1,1) double = 0.006
-        obsUpdateStartIter (1,1) double = 50
+        obsUpdateStartIter (1,1) double = 20
+
+        gammaQ (1,1) double = 0.10
+        gammaR (1,1) double = 0.10
+        gammaHyp (1,1) double = 5e-3
+        thetaUpdateStartIter (1,1) double = 10
+
+        gammaZ (1,1) double = 0.15
+        zUpdateStartIter (1,1) double = 5
+
+        % Numerical floors / init
+        initStateVar (1,1) double = 0.25
+        minObsVar (1,1) double = 1e-4
+        minProcessVar (1,1) double = 1e-5
+        hypFiniteDiffEps (1,1) double = 1e-3
+        jitter (1,1) double = 1e-6
 
         % GPML settings
         covfunc = @covSEard
@@ -29,9 +45,7 @@ classdef VGPSSMOptions
 
         % Initialisation
         initStrategy char = 'Default'
-
-        % Convergence
-        convergenceType char = 'FixedIter'
+        inducingStateInit char = 'data'
 
         % Debug
         verbose logical = true
