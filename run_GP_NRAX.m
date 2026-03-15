@@ -3,7 +3,6 @@ clear; clc; close all;
 %% Add GPML path
 addpath(genpath('./'));
 startup;
-
 rng(1);
 
 %% =========================
@@ -12,31 +11,66 @@ rng(1);
 % exampleFcn = @generate_frigola_benchmark_example;
 % exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
-% exampleFcn = @generate_nonlinear_msd_example;
+exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
-% exampleFcn = @generate_linear_mimo3_example;   % <- MIMO example
+% exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+
 %% =========================
 % Generate raw data
 %% =========================
 data = exampleFcn();
 
 t         = data.t;
-u         = data.u;     % N x nu
-y         = data.y;     % N x ny
+uRaw      = data.u;     % N x nu
+yRaw      = data.y;     % N x ny
 na_input  = data.na;
 nb_input  = data.nb;
 nk_input  = data.nk;
-Ts        = data.Ts;
 modelName = data.modelName;
 
-if isvector(u), u = u(:); end
-if isvector(y), y = y(:); end
+if isvector(uRaw), uRaw = uRaw(:); end
+if isvector(yRaw), yRaw = yRaw(:); end
 
-N  = size(y,1);
-ny = size(y,2);
-nu = size(u,2);
+N  = size(yRaw,1);
+ny = size(yRaw,2);
+nu = size(uRaw,2);
+
+%% =========================
+% Savitzky-Golay preprocessing
+%% =========================
+usePreprocessing = true;
+
+sgolayFrame_u = 21;   % odd
+sgolayFrame_y = 21;   % odd
+
+u = uRaw;
+y = yRaw;
+
+if usePreprocessing
+    for j = 1:nu
+        frameNow = min(sgolayFrame_u, N - mod(N+1,2));
+        if mod(frameNow,2) == 0
+            frameNow = frameNow - 1;
+        end
+        if frameNow < 3
+            error('Savitzky-Golay frame length for input is too short.');
+        end
+        u(:,j) = smoothdata(uRaw(:,j), 'sgolay', frameNow);
+    end
+
+    for j = 1:ny
+        frameNow = min(sgolayFrame_y, N - mod(N+1,2));
+        if mod(frameNow,2) == 0
+            frameNow = frameNow - 1;
+        end
+        if frameNow < 3
+            error('Savitzky-Golay frame length for output is too short.');
+        end
+        y(:,j) = smoothdata(yRaw(:,j), 'sgolay', frameNow);
+    end
+end
 
 %% =========================
 % Convert orders to full matrices
@@ -44,9 +78,7 @@ nu = size(u,2);
 [naMat, nbMat, nkMat] = expand_narx_orders(na_input, nb_input, nk_input, ny, nu);
 
 %% =========================
-% Build universal NARX regressors
-% X(k,:) uses past outputs of all channels + past inputs of all channels
-% Y(k,:) = current outputs of all channels
+% Build NARX regressors
 %% =========================
 [Xall, Yall, idxAll] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
 
@@ -56,7 +88,7 @@ nu = size(u,2);
 if isfield(data, 'uEst') && isfield(data, 'yEst')
     NtrOriginal = size(data.uEst,1);
     trainMask = idxAll <= NtrOriginal;
-    testMask  = idxAll >  NtrOriginal;
+    testMask  = idxAll > NtrOriginal;
 elseif isfield(data, 'idxTe')
     testMask  = ismember(idxAll, data.idxTe(:));
     trainMask = ~testMask;
@@ -70,10 +102,10 @@ else
     testMask = ~trainMask;
 end
 
-Xtr = Xall(trainMask,:);
-Ytr = Yall(trainMask,:);
-Xte = Xall(testMask,:);
-Yte = Yall(testMask,:);
+Xtr   = Xall(trainMask,:);
+Ytr   = Yall(trainMask,:);
+Xte   = Xall(testMask,:);
+Yte   = Yall(testMask,:);
 idxTe = idxAll(testMask);
 
 %% =========================
@@ -83,7 +115,6 @@ idxTe = idxAll(testMask);
 XteN = apply_normalization(Xte, muX, stdX);
 
 [YtrN, muY, stdY] = normalize_data(Ytr);
-YteN = apply_normalization(Yte, muY, stdY); %#ok<NASGU>
 
 %% =========================
 % GPML setup
@@ -119,21 +150,9 @@ muTe = muTeN .* stdY + muY;
 s2Te = s2TeN .* (stdY.^2);
 
 %% =========================
-% One-step prediction metrics
-%% =========================
-rmse1_each = sqrt(mean((Yte - muTe).^2, 1));
-fit1_each  = zeros(1, ny);
-for j = 1:ny
-    fit1_each(j) = 100 * (1 - norm(Yte(:,j) - muTe(:,j)) / norm(Yte(:,j) - mean(Yte(:,j))));
-end
-
-rmse1 = mean(rmse1_each);
-fit1  = mean(fit1_each);
-
-%% =========================
 % Free-run simulation
 %% =========================
-yHatFree = nan(size(Yte));     % Ntest x ny
+yHatFree = nan(size(Yte));
 testStartOriginalIndex = idxTe(1);
 
 for n = 1:size(Yte,1)
@@ -152,79 +171,62 @@ for n = 1:size(Yte,1)
     end
 end
 
-rmseFree_each = sqrt(mean((Yte - yHatFree).^2, 1));
-fitFree_each  = zeros(1, ny);
-for j = 1:ny
-    fitFree_each(j) = 100 * (1 - norm(Yte(:,j) - yHatFree(:,j)) / norm(Yte(:,j) - mean(Yte(:,j))));
-end
+%% =========================
+% Metrics
+%% =========================
+metrics = compute_prediction_metrics(Yte, muTe, yHatFree);
 
-rmseFree = mean(rmseFree_each);
-fitFree  = mean(fitFree_each);
+rmse1_each    = metrics.rmse1_each;
+fit1_each     = metrics.fit1_each;
+rmseFree_each = metrics.rmseFree_each;
+fitFree_each  = metrics.fitFree_each;
+
+rmse1    = metrics.rmse1;
+fit1     = metrics.fit1;
+rmseFree = metrics.rmseFree;
+fitFree  = metrics.fitFree;
 
 %% =========================
 % Plot
 %% =========================
 tTe = t(idxTe);
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(t, y(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    if j == 1
-        title(['Measured output - ', modelName]);
-    end
+if usePreprocessing
+    algoName = 'GP-NARX (Savitzky-Golay preprocessed)';
+else
+    algoName = 'GP-NARX';
 end
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
+plot_measured_outputs_with_preprocessed(t, yRaw, y, modelName);
 
-    upper = muTe(:,j) + 2*sqrt(max(s2Te(:,j),0));
-    lower = muTe(:,j) - 2*sqrt(max(s2Te(:,j),0));
+plot_gp_prediction_with_band( ...
+    tTe, Yte, muTe, s2Te, ...
+    rmse1_each, fit1_each, ...
+    modelName, algoName, 'One-step prediction');
 
-    fill([tTe; flipud(tTe)], [upper; flipud(lower)], ...
-        [0.85 0.90 1.00], 'EdgeColor', 'none'); hold on;
-    plot(tTe, Yte(:,j), 'k', 'LineWidth', 1.2);
-    plot(tTe, muTe(:,j), 'r--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('95% band', 'True', 'GP-NARX one-step', 'Location', 'best');
-    title(sprintf('One-step | output %d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmse1_each(j), fit1_each(j)));
-end
-sgtitle([modelName, ' | One-step prediction']);
+plot_estimation_result( ...
+    tTe, Yte, yHatFree, ...
+    rmseFree_each, fitFree_each, ...
+    modelName, algoName, ...
+    'Free-run simulation', ...
+    'free-run', ...
+    'b--');
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tTe, Yte(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tTe, yHatFree(:,j), 'b--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'GP-NARX free-run', 'Location', 'best');
-    title(sprintf('Free-run | output %d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmseFree_each(j), fitFree_each(j)));
-end
-sgtitle([modelName, ' | Free-run simulation']);
+plot_estimation_errors(tTe, Yte, muTe, yHatFree, modelName, algoName);
 
-fprintf('\n');
-fprintf('Model             : %s\n', modelName);
-fprintf('Outputs           : %d\n', ny);
-fprintf('Inputs            : %d\n', nu);
-fprintf('Mean One-step RMSE: %.6f\n', rmse1);
-fprintf('Mean One-step FIT : %.2f %%\n', fit1);
-fprintf('Mean Free-run RMSE: %.6f\n', rmseFree);
-fprintf('Mean Free-run FIT : %.2f %%\n', fitFree);
-for j = 1:ny
-    fprintf('  y_%d -> one-step RMSE %.6f, FIT %.2f %% | free-run RMSE %.6f, FIT %.2f %%\n', ...
-        j, rmse1_each(j), fit1_each(j), rmseFree_each(j), fitFree_each(j));
-end
-fprintf('\n');
+%% =========================
+% Print summary
+%% =========================
+extraInfo = sprintf(['Regressor dimension : %d\n' ...
+                     'SG frame (input)    : %d\n' ...
+                     'SG frame (output)   : %d'], ...
+                     size(Xtr,2), sgolayFrame_u, sgolayFrame_y);
+
+print_sysid_summary( ...
+    modelName, algoName, nu, ny, ...
+    rmse1, fit1, rmseFree, fitFree, ...
+    rmse1_each, fit1_each, rmseFree_each, fitFree_each, ...
+    extraInfo);
 
 %% remove path
 rmpath(genpath('./'));

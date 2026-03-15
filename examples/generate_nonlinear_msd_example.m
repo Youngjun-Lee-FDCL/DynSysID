@@ -8,9 +8,10 @@ function data = generate_nonlinear_msd_example()
     t  = (0:N-1)' * Ts;
 
     % input
+    sigmaU = 0.5;
     u = 1.0*sin(2*pi*0.4*t) ...
       + 0.7*sin(2*pi*1.1*t + 0.3) ...
-      + 0.3*randn(N,1);
+      + sigmaU*randn(N,1);
 
     % parameters
     m  = 1.0;
