@@ -9,7 +9,7 @@ rng(1);
 % Select example generator
 %% =========================
 % exampleFcn = @generate_frigola_benchmark_example;
-% exampleFcn = @generate_linear_msd_example;
+exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
 exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
@@ -187,7 +187,7 @@ rmseFree = metrics.rmseFree;
 fitFree  = metrics.fitFree;
 
 %% =========================
-% Plot
+% Validation time
 %% =========================
 tTe = t(idxTe);
 
