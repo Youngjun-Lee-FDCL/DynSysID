@@ -41,7 +41,7 @@ function data = generate_nonlinear_aircraft43_PID_example()
     % y3=r     -> rudder
     %
     % thrust is coupled weakly to theta and phi loops
-    Kp = [2.8; 2.5; 1.8];
+    Kp = [2.8; 2.5; 2.8];
     Ki = [0.25; 0.20; 0.12];
     Kd = [0.12; 0.10; 0.08];
 
@@ -55,10 +55,10 @@ function data = generate_nonlinear_aircraft43_PID_example()
 
     %% References for outputs [theta, phi, r]
     r = zeros(N,3);
-    changeTimes = [0 12 24 36 48 60];
-    r(:,1) = make_step_profile(t, changeTimes, [ 0.00  0.08 -0.06  0.10 -0.08  0.05]);
-    r(:,2) = make_step_profile(t, changeTimes, [ 0.00 -0.10  0.08 -0.12  0.10 -0.06]);
-    r(:,3) = make_step_profile(t, changeTimes, [ 0.00  0.05 -0.04  0.06 -0.05  0.03]);
+    changeTimes = [0 12 24 36 48 60 72 84 96];
+    r(:,1) = make_step_profile(t, changeTimes, [ 0.00  0.08 -0.06  0.10 -0.08  0.05 0.10 -0.08 -0.06]);
+    r(:,2) = make_step_profile(t, changeTimes, [ 0.00 -0.10  0.08 -0.12  0.10 -0.06 0.10 -0.08 -0.06]);
+    r(:,3) = make_step_profile(t, changeTimes, [ 0.00  0.05 -0.10  0.06 -0.05  0.03 -0.10 0.08 -0.06]);
 
     %% Dimensions
     nx = 6;
@@ -81,6 +81,7 @@ function data = generate_nonlinear_aircraft43_PID_example()
     y(1,:) = [x(1,4), x(1,5), x(1,3)] + sigmaV .* randn(1,ny);
 
     %% Closed-loop simulation
+    flag = false;
     for k = 1:N-1
         % Outputs
         yk = y(k,:);
@@ -91,7 +92,13 @@ function data = generate_nonlinear_aircraft43_PID_example()
         % PID terms
         eInt = eInt + e * Ts;
         eDer = (e - ePrev) / Ts;
-
+        
+        if k > N * 0.7 && flag == false % NOTE: Split ratio is 0.7
+            Kp = 0.5*Kp; % use different gain at the start of making test dataset
+            Ki = 0.5*Ki;
+            Kd = 0.5*Kd;
+            flag = true;
+        end
         pidOut = (Kp .* e.' + Ki .* eInt.' + Kd .* eDer.').';
 
         % Input mapping
@@ -172,8 +179,8 @@ function data = generate_nonlinear_aircraft43_PID_example()
     u(N,:) = u(N-1,:);
 
     %% Suggested model orders
-    na = 3 * ones(3,3);
-    nb = 3 * ones(3,4);
+    na = 4 * ones(3,3);
+    nb = 4 * ones(3,4);
     nk = 1 * ones(3,4);
 
     %% Train/validation split

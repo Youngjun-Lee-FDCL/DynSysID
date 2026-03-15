@@ -14,8 +14,8 @@ addpath(genpath('./'));
 % exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_linear_mimo3_PID_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
-
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+exampleFcn = @generate_vgpssm_easy_example;
 %% =========================
 % Generate data
 %% =========================

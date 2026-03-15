@@ -11,12 +11,12 @@ rng(1);
 % exampleFcn = @generate_frigola_benchmark_example;
 % exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
-exampleFcn = @generate_nonlinear_msd_example;
+% exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
 % exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
-% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
-
+exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+% exampleFcn = @generate_vgpssm_easy_example;
 %% =========================
 % Generate raw data
 %% =========================
@@ -40,7 +40,7 @@ nu = size(uRaw,2);
 %% =========================
 % Output-only preprocessing
 %% =========================
-usePreprocessing = true;
+usePreprocessing = false;
 sgolayFrame_y    = 21;   % Must be odd
 
 u = uRaw;   % Input is NOT smoothed
@@ -135,7 +135,7 @@ for j = 1:ny
     hyp.cov  = [zeros(D,1); 0];
     hyp.lik  = log(0.1);
 
-    hypOpt{j} = minimize(hyp, @gp, -120, ...
+    hypOpt{j} = minimize(hyp, @gp, -200, ...
         inffunc, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));
 
     [muTeN(:,j), s2TeN(:,j)] = gp(hypOpt{j}, ...
@@ -149,6 +149,7 @@ s2Te = s2TeN .* (stdY.^2);
 % Free-run simulation
 % Rollout uses raw input u and filtered/raw output history y
 %% =========================
+disp("Free-run simulation starts...")
 yHatFree = nan(size(Yte));   % Predicted output on original output scale
 testStartOriginalIndex = idxTe(1);
 
