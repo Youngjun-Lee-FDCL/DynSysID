@@ -3,7 +3,6 @@ clear; clc; close all;
 %% Add GPML path
 addpath(genpath('./'));
 startup;
-
 rng(1);
 
 %% =========================
@@ -12,7 +11,7 @@ rng(1);
 % exampleFcn = @generate_frigola_benchmark_example;
 exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
-% exampleFcn = @generate_nonlinear_msd_example;
+exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
 % exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
@@ -24,20 +23,54 @@ exampleFcn = @generate_linear_msd_example;
 data = exampleFcn();
 
 t         = data.t;
-u         = data.u;     % N x nu
-y         = data.y;     % N x ny
+uRaw      = data.u;     % N x nu
+yRaw      = data.y;     % N x ny
 na_input  = data.na;
 nb_input  = data.nb;
 nk_input  = data.nk;
-Ts        = data.Ts;
 modelName = data.modelName;
 
-if isvector(u), u = u(:); end
-if isvector(y), y = y(:); end
+if isvector(uRaw), uRaw = uRaw(:); end
+if isvector(yRaw), yRaw = yRaw(:); end
 
-N  = size(y,1);
-ny = size(y,2);
-nu = size(u,2);
+N  = size(yRaw,1);
+ny = size(yRaw,2);
+nu = size(uRaw,2);
+
+%% =========================
+% Savitzky-Golay preprocessing
+%% =========================
+usePreprocessing = true;
+
+sgolayFrame_u = 21;   % odd
+sgolayFrame_y = 21;   % odd
+
+u = uRaw;
+y = yRaw;
+
+if usePreprocessing
+    for j = 1:nu
+        frameNow = min(sgolayFrame_u, N - mod(N+1,2));
+        if mod(frameNow,2) == 0
+            frameNow = frameNow - 1;
+        end
+        if frameNow < 3
+            error('Savitzky-Golay frame length for input is too short.');
+        end
+        u(:,j) = smoothdata(uRaw(:,j), 'sgolay', frameNow);
+    end
+
+    for j = 1:ny
+        frameNow = min(sgolayFrame_y, N - mod(N+1,2));
+        if mod(frameNow,2) == 0
+            frameNow = frameNow - 1;
+        end
+        if frameNow < 3
+            error('Savitzky-Golay frame length for output is too short.');
+        end
+        y(:,j) = smoothdata(yRaw(:,j), 'sgolay', frameNow);
+    end
+end
 
 %% =========================
 % Convert orders to full matrices
@@ -45,7 +78,7 @@ nu = size(u,2);
 [naMat, nbMat, nkMat] = expand_narx_orders(na_input, nb_input, nk_input, ny, nu);
 
 %% =========================
-% Build universal NARX regressors
+% Build NARX regressors
 %% =========================
 [Xall, Yall, idxAll] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
 
@@ -55,7 +88,7 @@ nu = size(u,2);
 if isfield(data, 'uEst') && isfield(data, 'yEst')
     NtrOriginal = size(data.uEst,1);
     trainMask = idxAll <= NtrOriginal;
-    testMask  = idxAll >  NtrOriginal;
+    testMask  = idxAll > NtrOriginal;
 elseif isfield(data, 'idxTe')
     testMask  = ismember(idxAll, data.idxTe(:));
     trainMask = ~testMask;
@@ -69,10 +102,10 @@ else
     testMask = ~trainMask;
 end
 
-Xtr = Xall(trainMask,:);
-Ytr = Yall(trainMask,:);
-Xte = Xall(testMask,:);
-Yte = Yall(testMask,:);
+Xtr   = Xall(trainMask,:);
+Ytr   = Yall(trainMask,:);
+Xte   = Xall(testMask,:);
+Yte   = Yall(testMask,:);
 idxTe = idxAll(testMask);
 
 %% =========================
@@ -82,7 +115,6 @@ idxTe = idxAll(testMask);
 XteN = apply_normalization(Xte, muX, stdX);
 
 [YtrN, muY, stdY] = normalize_data(Ytr);
-YteN = apply_normalization(Yte, muY, stdY); %#ok<NASGU>
 
 %% =========================
 % GPML setup
@@ -120,7 +152,7 @@ s2Te = s2TeN .* (stdY.^2);
 %% =========================
 % Free-run simulation
 %% =========================
-yHatFree = nan(size(Yte));     % Ntest x ny
+yHatFree = nan(size(Yte));
 testStartOriginalIndex = idxTe(1);
 
 for n = 1:size(Yte,1)
@@ -140,7 +172,7 @@ for n = 1:size(Yte,1)
 end
 
 %% =========================
-% Common metrics
+% Metrics
 %% =========================
 metrics = compute_prediction_metrics(Yte, muTe, yHatFree);
 
@@ -159,40 +191,36 @@ fitFree  = metrics.fitFree;
 %% =========================
 tTe = t(idxTe);
 
-%% =========================
-% Plot measured outputs (common)
-%% =========================
-plot_measured_outputs(t, y, modelName);
+if usePreprocessing
+    algoName = 'GP-NARX (Savitzky-Golay preprocessed)';
+else
+    algoName = 'GP-NARX';
+end
 
-%% =========================
-% Plot one-step with uncertainty band (GP-specific)
-%% =========================
+plot_measured_outputs_with_preprocessed(t, yRaw, y, modelName);
+
 plot_gp_prediction_with_band( ...
     tTe, Yte, muTe, s2Te, ...
     rmse1_each, fit1_each, ...
-    modelName, 'GP-NARX', 'One-step prediction');
+    modelName, algoName, 'One-step prediction');
 
-%% =========================
-% Plot free-run simulation (common)
-%% =========================
 plot_estimation_result( ...
     tTe, Yte, yHatFree, ...
     rmseFree_each, fitFree_each, ...
-    modelName, 'GP-NARX', ...
+    modelName, algoName, ...
     'Free-run simulation', ...
     'free-run', ...
     'b--');
 
-%% =========================
-% Plot errors (common)
-%% =========================
-plot_estimation_errors(tTe, Yte, muTe, yHatFree, modelName, 'GP-NARX');
+plot_estimation_errors(tTe, Yte, muTe, yHatFree, modelName, algoName);
 
 %% =========================
-% Print summary (common)
+% Print summary
 %% =========================
-algoName = 'GP-NARX';
-extraInfo = sprintf('Regressor dimension : %d', size(Xtr,2));
+extraInfo = sprintf(['Regressor dimension : %d\n' ...
+                     'SG frame (input)    : %d\n' ...
+                     'SG frame (output)   : %d'], ...
+                     size(Xtr,2), sgolayFrame_u, sgolayFrame_y);
 
 print_sysid_summary( ...
     modelName, algoName, nu, ny, ...
