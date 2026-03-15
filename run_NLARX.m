@@ -212,14 +212,6 @@ for j = 1:ny
 end
 
 %% =========================
-% Compare plot
-%% =========================
-figure('Color','w');
-compare(zVal, sysNLARX);
-grid on;
-title([modelName, ' - compare() result']);
-
-%% =========================
 % Print metrics
 %% =========================
 fprintf('\n');
