@@ -11,10 +11,11 @@ addpath(genpath('./'));
 % exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
 % exampleFcn = @generate_frigola_benchmark_example;
-% exampleFcn = @generate_linear_mimo3_example;   % <- MIMO example
-% exampleFcn = @generate_linear_mimo3_PID_example;   % <- MIMO example
+% exampleFcn = @generate_linear_mimo3_example;
+% exampleFcn = @generate_linear_mimo3_PID_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
 exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+
 %% =========================
 % Generate data
 %% =========================
@@ -81,58 +82,52 @@ orders = 1:8;
 %% =========================
 % N4SID options
 %% =========================
-opt = n4sidOptions;
-opt.Focus = 'simulation';
-opt.N4Weight = 'all';      % alternatives: 'MOESP', 'SSARX', 'auto'
-opt.N4Horizon = 'auto';
-opt.InitialState = 'auto';
+optN4 = n4sidOptions;
+optN4.Focus = 'simulation';
+optN4.N4Weight = 'all';      % alternatives: 'MOESP', 'SSARX', 'auto'
+optN4.N4Horizon = 'auto';
+optN4.InitialState = 'auto';
 
 %% =========================
 % Estimate models of multiple orders
 %% =========================
 models = cell(numel(orders),1);
 
-fitPred_each = zeros(numel(orders), ny);
-fitSim_each  = zeros(numel(orders), ny);
-rmsePred_each = zeros(numel(orders), ny);
-rmseSim_each  = zeros(numel(orders), ny);
+fitPred_each   = zeros(numel(orders), ny);
+fitSim_each    = zeros(numel(orders), ny);
+rmsePred_each  = zeros(numel(orders), ny);
+rmseSim_each   = zeros(numel(orders), ny);
 
-fitPred_mean = zeros(numel(orders),1);
-fitSim_mean  = zeros(numel(orders),1);
-rmsePred_mean = zeros(numel(orders),1);
-rmseSim_mean  = zeros(numel(orders),1);
+fitPred_mean   = zeros(numel(orders),1);
+fitSim_mean    = zeros(numel(orders),1);
+rmsePred_mean  = zeros(numel(orders),1);
+rmseSim_mean   = zeros(numel(orders),1);
 
 for i = 1:numel(orders)
     nx = orders(i);
 
-    models{i} = n4sid(zEst, nx, opt);
+    models{i} = n4sid(zEst, nx, optN4);
 
     % one-step prediction
     yPredObj = predict(models{i}, zVal, 1);
-    yPred = yPredObj.OutputData;
+    yPred_i = yPredObj.OutputData;
 
     % free-run simulation
     ySimObj = sim(models{i}, zVal);
-    ySim = ySimObj.OutputData;
+    ySim_i = ySimObj.OutputData;
 
-    for j = 1:ny
-        rmsePred_each(i,j) = sqrt(mean((yTrue(:,j) - yPred(:,j)).^2));
-        rmseSim_each(i,j)  = sqrt(mean((yTrue(:,j) - ySim(:,j)).^2));
+    % common metric function
+    metrics_i = compute_prediction_metrics(yTrue, yPred_i, ySim_i);
 
-        denom = norm(yTrue(:,j) - mean(yTrue(:,j)));
-        if denom < 1e-12
-            fitPred_each(i,j) = NaN;
-            fitSim_each(i,j)  = NaN;
-        else
-            fitPred_each(i,j) = 100 * (1 - norm(yTrue(:,j) - yPred(:,j)) / denom);
-            fitSim_each(i,j)  = 100 * (1 - norm(yTrue(:,j) - ySim(:,j))  / denom);
-        end
-    end
+    rmsePred_each(i,:) = metrics_i.rmse1_each;
+    rmseSim_each(i,:)  = metrics_i.rmseFree_each;
+    fitPred_each(i,:)  = metrics_i.fit1_each;
+    fitSim_each(i,:)   = metrics_i.fitFree_each;
 
-    fitPred_mean(i)  = mean(fitPred_each(i,:), 'omitnan');
-    fitSim_mean(i)   = mean(fitSim_each(i,:), 'omitnan');
-    rmsePred_mean(i) = mean(rmsePred_each(i,:), 'omitnan');
-    rmseSim_mean(i)  = mean(rmseSim_each(i,:), 'omitnan');
+    fitPred_mean(i)   = metrics_i.fit1;
+    fitSim_mean(i)    = metrics_i.fitFree;
+    rmsePred_mean(i)  = metrics_i.rmse1;
+    rmseSim_mean(i)   = metrics_i.rmseFree;
 end
 
 %% =========================
@@ -142,123 +137,71 @@ end
 bestOrder = orders(bestIdx);
 sysN4 = models{bestIdx};
 
-fprintf('\n');
-fprintf('Model                   : %s\n', modelName);
-fprintf('Number of inputs        : %d\n', nu);
-fprintf('Number of outputs       : %d\n', ny);
-fprintf('Best order              : %d\n', bestOrder);
-fprintf('Best mean one-step RMSE : %.6f\n', rmsePred_mean(bestIdx));
-fprintf('Best mean one-step FIT  : %.2f %%\n', fitPred_mean(bestIdx));
-fprintf('Best mean free-run RMSE : %.6f\n', rmseSim_mean(bestIdx));
-fprintf('Best mean free-run FIT  : %.2f %%\n', fitSim_mean(bestIdx));
-fprintf('\n');
-
 %% =========================
 % Final one-step / free-run using selected model
 %% =========================
 x0 = findstates(sysN4, zVal);
-opt = simOptions('InitialCondition', x0);
+optSim = simOptions('InitialCondition', x0);
 
-yPredObj = predict(sysN4, zVal, 1, opt);
+yPredObj = predict(sysN4, zVal, 1, optSim);
 yPred = yPredObj.OutputData;
 
-ySimObj = sim(sysN4, zVal, opt);
+ySimObj = sim(sysN4, zVal, optSim);
 ySim = ySimObj.OutputData;
 
-rmsePred_best_each = rmsePred_each(bestIdx,:);
-rmseSim_best_each  = rmseSim_each(bestIdx,:);
-fitPred_best_each  = fitPred_each(bestIdx,:);
-fitSim_best_each   = fitSim_each(bestIdx,:);
+metrics_best = compute_prediction_metrics(yTrue, yPred, ySim);
+
+rmsePred_best_each = metrics_best.rmse1_each;
+rmseSim_best_each  = metrics_best.rmseFree_each;
+fitPred_best_each  = metrics_best.fit1_each;
+fitSim_best_each   = metrics_best.fitFree_each;
+
+rmsePred_best = metrics_best.rmse1;
+rmseSim_best  = metrics_best.rmseFree;
+fitPred_best  = metrics_best.fit1;
+fitSim_best   = metrics_best.fitFree;
 
 %% =========================
-% Plot measured output
+% Plot measured output (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(t, y(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    if j == 1
-        title(['Measured output - ', modelName]);
-    end
-end
+plot_measured_outputs(t, y, modelName);
 
 %% =========================
-% Plot order selection results
+% Plot order selection results (common)
 %% =========================
-figure('Color','w');
-yyaxis left;
-plot(orders, fitPred_mean, 'o-', 'LineWidth', 1.2); hold on;
-plot(orders, fitSim_mean,  's-', 'LineWidth', 1.2);
-ylabel('Mean FIT (%)');
-
-yyaxis right;
-plot(orders, rmsePred_mean, 'o--', 'LineWidth', 1.0);
-plot(orders, rmseSim_mean,  's--', 'LineWidth', 1.0);
-ylabel('Mean RMSE');
-
-grid on;
-xlabel('Model order');
-title([modelName, ' - N4SID order scan']);
-legend('Mean one-step FIT', 'Mean free-run FIT', ...
-       'Mean one-step RMSE', 'Mean free-run RMSE', ...
-       'Location', 'best');
+plot_selection_curve( ...
+    orders, ...
+    fitPred_mean, fitSim_mean, ...
+    rmsePred_mean, rmseSim_mean, ...
+    'Model order', ...
+    [modelName, ' - N4SID order scan']);
 
 %% =========================
-% Plot one-step prediction
+% Plot one-step prediction (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tVal, yTrue(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tVal, yPred(:,j), 'r--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'N4SID one-step', 'Location', 'best');
-    title(sprintf('One-step | y_%d | order=%d | RMSE=%.4f | FIT=%.2f%%', ...
-        j, bestOrder, rmsePred_best_each(j), fitPred_best_each(j)));
-end
-sgtitle([modelName, ' | N4SID one-step prediction']);
+plot_estimation_result( ...
+    tVal, yTrue, yPred, ...
+    rmsePred_best_each, fitPred_best_each, ...
+    modelName, 'N4SID', ...
+    'One-step prediction', ...
+    sprintf('One-step | order=%d', bestOrder), ...
+    'r--');
 
 %% =========================
-% Plot free-run simulation
+% Plot free-run simulation (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tVal, yTrue(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tVal, ySim(:,j), 'b--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'N4SID free-run', 'Location', 'best');
-    title(sprintf('Free-run | y_%d | order=%d | RMSE=%.4f | FIT=%.2f%%', ...
-        j, bestOrder, rmseSim_best_each(j), fitSim_best_each(j)));
-end
-sgtitle([modelName, ' | N4SID free-run simulation']);
+plot_estimation_result( ...
+    tVal, yTrue, ySim, ...
+    rmseSim_best_each, fitSim_best_each, ...
+    modelName, 'N4SID', ...
+    'Free-run simulation', ...
+    sprintf('Free-run | order=%d', bestOrder), ...
+    'b--');
 
 %% =========================
-% Plot errors
+% Plot errors (common)
 %% =========================
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,2,2*j-1);
-    plot(tVal, yTrue(:,j) - yPred(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('e_{1step,%d}', j));
-    title(sprintf('One-step error | y_%d', j));
-
-    subplot(ny,2,2*j);
-    plot(tVal, yTrue(:,j) - ySim(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('e_{free,%d}', j));
-    title(sprintf('Free-run error | y_%d', j));
-end
+plot_estimation_errors(tVal, yTrue, yPred, ySim, modelName, 'N4SID');
 
 %% =========================
 % Optional: model info
@@ -266,14 +209,16 @@ end
 disp(sysN4);
 
 %% =========================
-% Print per-channel metrics
+% Print summary (common)
 %% =========================
-for j = 1:ny
-    fprintf('y_%d -> one-step RMSE %.6f, FIT %.2f %% | free-run RMSE %.6f, FIT %.2f %%\n', ...
-        j, rmsePred_best_each(j), fitPred_best_each(j), ...
-        rmseSim_best_each(j),  fitSim_best_each(j));
-end
-fprintf('\n');
+algoName = 'N4SID';
+extraInfo = sprintf('Best order         : %d', bestOrder);
+
+print_sysid_summary( ...
+    modelName, algoName, nu, ny, ...
+    rmsePred_best, fitPred_best, rmseSim_best, fitSim_best, ...
+    rmsePred_best_each, fitPred_best_each, rmseSim_best_each, fitSim_best_each, ...
+    extraInfo);
 
 %% Remove path
 rmpath(genpath('./'));

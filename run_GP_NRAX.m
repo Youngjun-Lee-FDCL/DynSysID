@@ -10,13 +10,14 @@ rng(1);
 % Select example generator
 %% =========================
 % exampleFcn = @generate_frigola_benchmark_example;
-% exampleFcn = @generate_linear_msd_example;
+exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
 % exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
-% exampleFcn = @generate_linear_mimo3_example;   % <- MIMO example
+% exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+
 %% =========================
 % Generate raw data
 %% =========================
@@ -45,8 +46,6 @@ nu = size(u,2);
 
 %% =========================
 % Build universal NARX regressors
-% X(k,:) uses past outputs of all channels + past inputs of all channels
-% Y(k,:) = current outputs of all channels
 %% =========================
 [Xall, Yall, idxAll] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
 
@@ -119,18 +118,6 @@ muTe = muTeN .* stdY + muY;
 s2Te = s2TeN .* (stdY.^2);
 
 %% =========================
-% One-step prediction metrics
-%% =========================
-rmse1_each = sqrt(mean((Yte - muTe).^2, 1));
-fit1_each  = zeros(1, ny);
-for j = 1:ny
-    fit1_each(j) = 100 * (1 - norm(Yte(:,j) - muTe(:,j)) / norm(Yte(:,j) - mean(Yte(:,j))));
-end
-
-rmse1 = mean(rmse1_each);
-fit1  = mean(fit1_each);
-
-%% =========================
 % Free-run simulation
 %% =========================
 yHatFree = nan(size(Yte));     % Ntest x ny
@@ -152,79 +139,66 @@ for n = 1:size(Yte,1)
     end
 end
 
-rmseFree_each = sqrt(mean((Yte - yHatFree).^2, 1));
-fitFree_each  = zeros(1, ny);
-for j = 1:ny
-    fitFree_each(j) = 100 * (1 - norm(Yte(:,j) - yHatFree(:,j)) / norm(Yte(:,j) - mean(Yte(:,j))));
-end
+%% =========================
+% Common metrics
+%% =========================
+metrics = compute_prediction_metrics(Yte, muTe, yHatFree);
 
-rmseFree = mean(rmseFree_each);
-fitFree  = mean(fitFree_each);
+rmse1_each    = metrics.rmse1_each;
+fit1_each     = metrics.fit1_each;
+rmseFree_each = metrics.rmseFree_each;
+fitFree_each  = metrics.fitFree_each;
+
+rmse1    = metrics.rmse1;
+fit1     = metrics.fit1;
+rmseFree = metrics.rmseFree;
+fitFree  = metrics.fitFree;
 
 %% =========================
-% Plot
+% Validation time
 %% =========================
 tTe = t(idxTe);
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(t, y(:,j), 'LineWidth', 1.2);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    if j == 1
-        title(['Measured output - ', modelName]);
-    end
-end
+%% =========================
+% Plot measured outputs (common)
+%% =========================
+plot_measured_outputs(t, y, modelName);
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
+%% =========================
+% Plot one-step with uncertainty band (GP-specific)
+%% =========================
+plot_gp_prediction_with_band( ...
+    tTe, Yte, muTe, s2Te, ...
+    rmse1_each, fit1_each, ...
+    modelName, 'GP-NARX', 'One-step prediction');
 
-    upper = muTe(:,j) + 2*sqrt(max(s2Te(:,j),0));
-    lower = muTe(:,j) - 2*sqrt(max(s2Te(:,j),0));
+%% =========================
+% Plot free-run simulation (common)
+%% =========================
+plot_estimation_result( ...
+    tTe, Yte, yHatFree, ...
+    rmseFree_each, fitFree_each, ...
+    modelName, 'GP-NARX', ...
+    'Free-run simulation', ...
+    'free-run', ...
+    'b--');
 
-    fill([tTe; flipud(tTe)], [upper; flipud(lower)], ...
-        [0.85 0.90 1.00], 'EdgeColor', 'none'); hold on;
-    plot(tTe, Yte(:,j), 'k', 'LineWidth', 1.2);
-    plot(tTe, muTe(:,j), 'r--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('95% band', 'True', 'GP-NARX one-step', 'Location', 'best');
-    title(sprintf('One-step | output %d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmse1_each(j), fit1_each(j)));
-end
-sgtitle([modelName, ' | One-step prediction']);
+%% =========================
+% Plot errors (common)
+%% =========================
+plot_estimation_errors(tTe, Yte, muTe, yHatFree, modelName, 'GP-NARX');
 
-figure('Color','w');
-for j = 1:ny
-    subplot(ny,1,j);
-    plot(tTe, Yte(:,j), 'k', 'LineWidth', 1.2); hold on;
-    plot(tTe, yHatFree(:,j), 'b--', 'LineWidth', 1.4);
-    grid on;
-    xlabel('Time (s)');
-    ylabel(sprintf('y_%d', j));
-    legend('True', 'GP-NARX free-run', 'Location', 'best');
-    title(sprintf('Free-run | output %d | RMSE = %.4f, FIT = %.2f%%', ...
-        j, rmseFree_each(j), fitFree_each(j)));
-end
-sgtitle([modelName, ' | Free-run simulation']);
+%% =========================
+% Print summary (common)
+%% =========================
+algoName = 'GP-NARX';
+extraInfo = sprintf('Regressor dimension : %d', size(Xtr,2));
 
-fprintf('\n');
-fprintf('Model             : %s\n', modelName);
-fprintf('Outputs           : %d\n', ny);
-fprintf('Inputs            : %d\n', nu);
-fprintf('Mean One-step RMSE: %.6f\n', rmse1);
-fprintf('Mean One-step FIT : %.2f %%\n', fit1);
-fprintf('Mean Free-run RMSE: %.6f\n', rmseFree);
-fprintf('Mean Free-run FIT : %.2f %%\n', fitFree);
-for j = 1:ny
-    fprintf('  y_%d -> one-step RMSE %.6f, FIT %.2f %% | free-run RMSE %.6f, FIT %.2f %%\n', ...
-        j, rmse1_each(j), fit1_each(j), rmseFree_each(j), fitFree_each(j));
-end
-fprintf('\n');
+print_sysid_summary( ...
+    modelName, algoName, nu, ny, ...
+    rmse1, fit1, rmseFree, fitFree, ...
+    rmse1_each, fit1_each, rmseFree_each, fitFree_each, ...
+    extraInfo);
 
 %% remove path
 rmpath(genpath('./'));
