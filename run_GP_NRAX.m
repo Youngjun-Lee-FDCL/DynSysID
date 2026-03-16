@@ -15,8 +15,9 @@ rng(1);
 % exampleFcn = @generate_nonlinear_twotank_example;
 % exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
-% exampleFcn = @generate_vgpssm_easy_example;
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+exampleFcn = @generate_vgpssm_easy_example;
+
 %% =========================
 % Generate raw data
 %% =========================
@@ -115,19 +116,22 @@ XteN = apply_normalization(Xte, muX, stdX);
 %% =========================
 % GPML setup
 %% =========================
-meanfunc = @meanZero;
-covfunc  = @covSEard;
-likfunc  = @likGauss;
+meanfunc = {@meanZero};
+covfunc  = {@covSEard};
+likfunc  = {@likGauss};
 inffunc  = @infGaussLik;
 
 D = size(XtrN,2);
 
 %% =========================
 % Train one GP per output channel
+% Also precompute posterior quantities for fast prediction
 %% =========================
-hypOpt = cell(ny,1);
-muTeN  = zeros(size(Xte,1), ny);
-s2TeN  = zeros(size(Xte,1), ny);
+hypOpt   = cell(ny,1);
+postCell = cell(ny,1);
+
+muTeN = zeros(size(XteN,1), ny);
+s2TeN = zeros(size(XteN,1), ny);
 
 for j = 1:ny
     hyp = struct();
@@ -135,11 +139,17 @@ for j = 1:ny
     hyp.cov  = [zeros(D,1); 0];
     hyp.lik  = log(0.1);
 
+    % Hyperparameter optimization
     hypOpt{j} = minimize(hyp, @gp, -200, ...
         inffunc, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));
 
-    [muTeN(:,j), s2TeN(:,j)] = gp(hypOpt{j}, ...
-        inffunc, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j), XteN);
+    % Posterior for fast prediction
+    [postCell{j}, ~, ~] = infGaussLik( ...
+        hypOpt{j}, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));
+
+    % One-step prediction on test regressors
+    [muTeN(:,j), s2TeN(:,j)] = gpml_predict_mean_var_exact( ...
+        hypOpt{j}, meanfunc, covfunc, XtrN, XteN, postCell{j});
 end
 
 muTe = muTeN .* stdY + muY;
@@ -150,6 +160,7 @@ s2Te = s2TeN .* (stdY.^2);
 % Rollout uses raw input u and filtered/raw output history y
 %% =========================
 disp("Free-run simulation starts...")
+tFreeRunStart = tic;   % Start timer
 yHatFree = nan(size(Yte));   % Predicted output on original output scale
 testStartOriginalIndex = idxTe(1);
 
@@ -163,12 +174,14 @@ for n = 1:size(Yte,1)
     xNowN = apply_normalization(xNow, muX, stdX);
 
     for j = 1:ny
-        muNowN = gp(hypOpt{j}, inffunc, meanfunc, covfunc, likfunc, ...
-            XtrN, YtrN(:,j), xNowN);
+        muNowN = gpml_predict_mean_exact_single( ...
+            hypOpt{j}, meanfunc, covfunc, XtrN, xNowN, postCell{j});
+
         yHatFree(n,j) = muNowN * stdY(j) + muY(j);
     end
 end
-
+tFreeRunElapsed = toc(tFreeRunStart);   % End timer
+fprintf('Free-run simulation runtime: %.6f seconds\n', tFreeRunElapsed);
 %% =========================
 % Metrics against RAW outputs
 %% =========================
@@ -192,7 +205,7 @@ tTe = t(idxTe);
 if usePreprocessing
     algoName = 'GP-NARX (y-only Savitzky-Golay preprocessing, metrics on raw y)';
 else
-    algoName = 'GP-NARX (metrics on raw y)';
+    algoName = 'GP-NARX';
 end
 
 %% =========================
@@ -236,12 +249,14 @@ if usePreprocessing
                          'Input preprocessing : none\n' ...
                          'Output preprocessing: Savitzky-Golay\n' ...
                          'SG frame (output)   : %d\n' ...
+                         'Prediction mode     : cached posterior mean/var\n' ...
                          'Metrics target      : raw output'], ...
                          size(Xtr,2), sgolayFrame_y);
 else
     extraInfo = sprintf(['Regressor dimension : %d\n' ...
                          'Input preprocessing : none\n' ...
                          'Output preprocessing: none\n' ...
+                         'Prediction mode     : cached posterior mean/var\n' ...
                          'Metrics target      : raw output'], ...
                          size(Xtr,2));
 end
