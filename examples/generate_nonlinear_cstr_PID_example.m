@@ -1,33 +1,20 @@
-function data = generate_nonlinear_cstr_PID_example()
+function data = generate_nonlinear_cstr_PID_example(numExp)
 % Generate data for a nonlinear 4-input 3-output CSTR-like system
 % using PID controllers for step-reference tracking.
 %
-% States:
-%   x1 = CA   : reactant concentration
-%   x2 = T    : reactor temperature
-%   x3 = CB   : product concentration
+% Multi-experiment version:
+%   Each experiment is simulated independently.
+%   Outputs are stored in cell arrays.
 %
-% Inputs:
-%   u1 = F    : inlet flow rate
-%   u2 = CAf  : feed concentration
-%   u3 = Tf   : feed temperature
-%   u4 = Q    : heating/cooling term
+% Input
+%   numExp : number of independent experiments
 %
-% Outputs:
-%   y1 = CA
-%   y2 = T
-%   y3 = CB
-%
-% Continuous-time nonlinear model:
-%   dCA/dt = F/V*(CAf - CA) - k(T)*CA
-%   dT/dt  = F/V*(Tf - T) + alpha*k(T)*CA + beta*Q
-%   dCB/dt = -F/V*CB + k(T)*CA
-%
-% where
-%   k(T) = k0 * exp(-E_over_R / T)
-%
-% Output:
-%   data struct containing train/validation split and metadata
+% Output
+%   data struct containing multi-experiment datasets and metadata
+
+    if nargin < 1 || isempty(numExp)
+        numExp = 1;
+    end
 
     rng(1);
 
@@ -50,33 +37,200 @@ function data = generate_nonlinear_cstr_PID_example()
     sigmaW = 0.01*[0.002, 0.10, 0.002];   % process noise std for states
     sigmaV = 0.01*[0.005, 0.20, 0.005];   % measurement noise std for outputs
 
-    %% PID gains for 3 controlled outputs
+    %% Nominal PID gains for 3 controlled outputs
     % y1 -> u1 mainly
     % y2 -> u4 mainly
     % y3 -> u2 mainly
-    %
     % u3 is used as an auxiliary coupled input
-    Kp = [1.2;  0.8;  1.0];
-    Ki = [0.08; 0.04; 0.06];
-    Kd = [0.02; 0.01; 0.02];
+    Kp0 = [1.2;  0.8;  1.0];
+    Ki0 = [0.08; 0.04; 0.06];
+    Kd0 = [0.02; 0.01; 0.02];
 
     %% Input bounds
     uMin = [0.2, 0.2, 300.0, -20.0];
     uMax = [2.0, 2.0, 420.0,  20.0];
-
-    %% Step references for outputs [CA, T, CB]
-    r = zeros(N,3);
-    changeTimes = [0 10 20 30 40 50];
-    r(:,1) = make_step_profile(t, changeTimes, [0.80 -0.65 -0.90 -0.70 0.85 0.75]);
-    r(:,2) = make_step_profile(t, changeTimes, [350 360 345 370 355 365]);
-    r(:,3) = make_step_profile(t, changeTimes, [0.15 -0.25 -0.10 -0.30 0.18 0.22]);
 
     %% Dimensions
     nx = 3;
     ny = 3;
     nu = 4;
 
-    %% Preallocation
+    %% Suggested model orders for identification
+    na = 4 * ones(3,3);
+    nb = 4 * ones(3,4);
+    nk = 1 * ones(3,4);
+
+    %% Train/validation split
+    Ntr = round(0.7 * N);
+
+    %% Preallocate cell arrays
+    xCell    = cell(numExp,1);
+    yCell    = cell(numExp,1);
+    uCell    = cell(numExp,1);
+    rCell    = cell(numExp,1);
+    tCell    = cell(numExp,1);
+
+    xEstCell = cell(numExp,1);
+    yEstCell = cell(numExp,1);
+    uEstCell = cell(numExp,1);
+    rEstCell = cell(numExp,1);
+
+    xValCell = cell(numExp,1);
+    yValCell = cell(numExp,1);
+    uValCell = cell(numExp,1);
+    rValCell = cell(numExp,1);
+
+    idxValCell = cell(numExp,1);
+
+    expInfo = repmat(struct(), numExp, 1);
+
+    %% Run multiple independent experiments
+    for e = 1:numExp
+        % Slight variation in PID gains
+        gainScaleP = 0.85 + 0.30*rand;
+        gainScaleI = 0.85 + 0.30*rand;
+        gainScaleD = 0.85 + 0.30*rand;
+
+        Kp = gainScaleP * Kp0;
+        Ki = gainScaleI * Ki0;
+        Kd = gainScaleD * Kd0;
+
+        % Slight variation in initial state
+        x0 = [ ...
+            max(0.0, 0.8  + 0.05*randn), ...
+            max(250, 350.0 + 3.0*randn), ...
+            max(0.0, 0.15 + 0.03*randn)];
+
+        % Experiment-specific references
+        r = generate_reference_profile_cstr(t, e);
+
+        % Simulate one experiment
+        [x, y, u] = simulate_one_cstr_experiment( ...
+            t, r, x0, ...
+            V, k0, E_over_R, alpha, beta, ...
+            Kp, Ki, Kd, ...
+            uBias, uMin, uMax, ...
+            sigmaW, sigmaV);
+
+        % Store full data
+        xCell{e} = x;
+        yCell{e} = y;
+        uCell{e} = u;
+        rCell{e} = r;
+        tCell{e} = t;
+
+        % Store split data
+        xEstCell{e} = x(1:Ntr,:);
+        yEstCell{e} = y(1:Ntr,:);
+        uEstCell{e} = u(1:Ntr,:);
+        rEstCell{e} = r(1:Ntr,:);
+
+        xValCell{e} = x(Ntr+1:end,:);
+        yValCell{e} = y(Ntr+1:end,:);
+        uValCell{e} = u(Ntr+1:end,:);
+        rValCell{e} = r(Ntr+1:end,:);
+
+        idxValCell{e} = (Ntr+1:N).';
+
+        % Per-experiment info
+        expInfo(e).Kp = Kp;
+        expInfo(e).Ki = Ki;
+        expInfo(e).Kd = Kd;
+        expInfo(e).x0 = x0;
+    end
+
+    %% Output struct
+    data = struct();
+    data.modelName = sprintf('Nonlinear CSTR 4x3 PID Tracking Example (%d experiments)', numExp);
+    data.isMultiExperiment = (numExp > 1);
+    data.numExp = numExp;
+
+    data.Ts = Ts;
+    data.N  = N;
+    data.t  = t;    % common time axis
+
+    data.nx = nx;
+    data.ny = ny;
+    data.nu = nu;
+
+    data.uBias = uBias;
+    data.uMin  = uMin;
+    data.uMax  = uMax;
+
+    data.params = struct( ...
+        'V', V, ...
+        'k0', k0, ...
+        'E_over_R', E_over_R, ...
+        'alpha', alpha, ...
+        'beta', beta);
+
+    data.sigmaW = sigmaW;
+    data.sigmaV = sigmaV;
+
+    data.na = na;
+    data.nb = nb;
+    data.nk = nk;
+
+    % Multi-experiment cell data
+    data.xCell = xCell;
+    data.yCell = yCell;
+    data.uCell = uCell;
+    data.rCell = rCell;
+    data.tCell = tCell;
+
+    data.xEstCell = xEstCell;
+    data.yEstCell = yEstCell;
+    data.uEstCell = uEstCell;
+    data.rEstCell = rEstCell;
+
+    data.xValCell = xValCell;
+    data.yValCell = yValCell;
+    data.uValCell = uValCell;
+    data.rValCell = rValCell;
+
+    data.idxValCell = idxValCell;
+    data.expInfo = expInfo;
+
+    % Backward compatibility for single experiment
+    if numExp == 1
+        data.x = xCell{1};
+        data.y = yCell{1};
+        data.u = uCell{1};
+        data.r = rCell{1};
+
+        data.xEst = xEstCell{1};
+        data.yEst = yEstCell{1};
+        data.uEst = uEstCell{1};
+        data.rEst = rEstCell{1};
+
+        data.xVal = xValCell{1};
+        data.yVal = yValCell{1};
+        data.uVal = uValCell{1};
+        data.rVal = rValCell{1};
+
+        data.idxVal = idxValCell{1};
+
+        data.Kp = expInfo(1).Kp;
+        data.Ki = expInfo(1).Ki;
+        data.Kd = expInfo(1).Kd;
+    end
+end
+
+function [x, y, u] = simulate_one_cstr_experiment( ...
+    t, r, x0, ...
+    V, k0, E_over_R, alpha, beta, ...
+    Kp, Ki, Kd, ...
+    uBias, uMin, uMax, ...
+    sigmaW, sigmaV)
+% Simulate one closed-loop CSTR experiment
+
+    Ts = t(2) - t(1);
+    N  = numel(t);
+
+    nx = 3;
+    ny = 3;
+    nu = 4;
+
     x = zeros(N, nx);
     y = zeros(N, ny);
     u = zeros(N, nu);
@@ -84,14 +238,10 @@ function data = generate_nonlinear_cstr_PID_example()
     eInt  = zeros(1,ny);
     ePrev = zeros(1,ny);
 
-    %% Initial state near nominal
-    x(1,:) = [0.8, 350.0, 0.15];
+    x(1,:) = x0;
     u(1,:) = uBias;
-
-    % Initial output
     y(1,:) = x(1,:) + sigmaV .* randn(1,ny);
 
-    %% Closed-loop simulation
     for k = 1:N-1
         % Tracking error
         e = r(k,:) - y(k,:);
@@ -118,8 +268,6 @@ function data = generate_nonlinear_cstr_PID_example()
 
         % Simple anti-windup
         satMask = abs(u(k,:) - uRaw) > 1e-12;
-
-        % map actuator saturation back to corresponding integrators
         if satMask(1), eInt(1) = eInt(1) - e(1)*Ts; end
         if satMask(2), eInt(3) = eInt(3) - e(3)*Ts; end
         if satMask(4), eInt(2) = eInt(2) - e(2)*Ts; end
@@ -144,6 +292,7 @@ function data = generate_nonlinear_cstr_PID_example()
 
         % Euler integration + process noise
         w = sigmaW .* randn(1,nx);
+
         x(k+1,1) = CA + Ts*dCA + w(1);
         x(k+1,2) = T  + Ts*dT  + w(2);
         x(k+1,3) = CB + Ts*dCB + w(3);
@@ -162,45 +311,45 @@ function data = generate_nonlinear_cstr_PID_example()
 
     % Final input sample
     u(N,:) = u(N-1,:);
+end
 
-    %% Suggested model orders for identification
-    na = 4 * ones(3,3);
-    nb = 4 * ones(3,4);
-    nk = 1 * ones(3,4);
+function r = generate_reference_profile_cstr(t, expIdx)
+% Generate experiment-specific reference profile for CSTR
 
-    %% Train/validation split
-    Ntr = round(0.7 * N);
+    N = numel(t);
+    r = zeros(N,3);
 
-    data = struct();
-    data.modelName = 'Nonlinear CSTR 4x3 PID Tracking Example';
-    data.Ts = Ts;
-    data.t  = t;
+    baseTimes = [0 10 20 30 40 50];
 
-    data.x = x;
-    data.r = r;
-    data.u = u;
-    data.y = y;
+    % Small switching-time jitter
+    jitter = [0 cumsum(0.25*randn(1, numel(baseTimes)-1))];
+    changeTimes = baseTimes + jitter;
+    changeTimes(1) = 0;
+    changeTimes = max(changeTimes, 0);
+    changeTimes = sort(changeTimes);
 
-    data.uBias = uBias;
-    data.params = struct('V',V,'k0',k0,'E_over_R',E_over_R,'alpha',alpha,'beta',beta);
+    % Base reference levels
+    lev1 = [0.80 -0.65 -0.90 -0.70 0.85 0.75];
+    lev2 = [350 360 345 370 355 365];
+    lev3 = [0.15 -0.25 -0.10 -0.30 0.18 0.22];
 
-    data.Kp = Kp;
-    data.Ki = Ki;
-    data.Kd = Kd;
+    % Experiment-dependent amplitude scaling
+    ampScale1 = 0.85 + 0.30*rand;
+    ampScale2 = 0.95 + 0.10*rand;
+    ampScale3 = 0.85 + 0.30*rand;
 
-    data.na = na;
-    data.nb = nb;
-    data.nk = nk;
+    lev1 = ampScale1 * lev1 + 0.02*randn(size(lev1));
+    lev2 = 350 + ampScale2 * (lev2 - 350) + 0.8*randn(size(lev2));
+    lev3 = ampScale3 * lev3 + 0.01*randn(size(lev3));
 
-    data.uEst = u(1:Ntr,:);
-    data.yEst = y(1:Ntr,:);
-    data.rEst = r(1:Ntr,:);
+    % Small experiment-dependent biases
+    lev1 = lev1 + 0.01*sin(0.6*expIdx);
+    lev2 = lev2 + 0.8*cos(0.4*expIdx);
+    lev3 = lev3 + 0.01*sin(0.3*expIdx);
 
-    data.uVal = u(Ntr+1:end,:);
-    data.yVal = y(Ntr+1:end,:);
-    data.rVal = r(Ntr+1:end,:);
-
-    data.idxVal = (Ntr+1:N).';
+    r(:,1) = make_step_profile(t, changeTimes, lev1);
+    r(:,2) = make_step_profile(t, changeTimes, lev2);
+    r(:,3) = make_step_profile(t, changeTimes, lev3);
 end
 
 function ref = make_step_profile(t, changeTimes, levels)

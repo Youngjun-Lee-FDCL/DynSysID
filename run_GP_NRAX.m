@@ -11,18 +11,17 @@ rng(1);
 % exampleFcn = @generate_frigola_benchmark_example;
 % exampleFcn = @generate_linear_msd_example;
 % exampleFcn = @generate_toy_nonlinear_example;
-% exampleFcn = @generate_nonlinear_msd_example;
+exampleFcn = @generate_nonlinear_msd_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
 % exampleFcn = @generate_linear_mimo3_example;
 % exampleFcn = @generate_nonlinear_cstr_PID_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
 % exampleFcn = @generate_vgpssm_easy_example;
 
 %% =========================
 % Multi-experiment options
 %% =========================
-numExp = 5;              % number of independent experiments
-valExpForTest = numExp;  % which experiment to use for final validation/free-run
+numExp = 5;   % number of independent experiments
 
 %% =========================
 % Generate raw data
@@ -64,7 +63,7 @@ sgolayFrame_y    = 21;   % Must be odd
 %% =========================
 useBlockCoverageSampling = true;
 blockLenSampling         = 30;
-numBlocksKeepSampling    = 3;
+numBlocksKeepSampling    = 5;
 useOverlapSampling       = true;
 
 %% =========================
@@ -109,9 +108,8 @@ for e = 1:data.numExp
 
     % Build experiment-wise regressors
     [Xe, Ye, idxAll_e] = build_mimo_narx_regressors(ye, ue, naMat, nbMat, nkMat);
-    
-    idxAllPerExp{e} = idxAll_e;
 
+    idxAllPerExp{e} = idxAll_e;
     numTrainRowsBeforeSampling = numTrainRowsBeforeSampling + size(Xe,1);
 
     % Optional experiment-wise block coverage sampling
@@ -121,8 +119,7 @@ for e = 1:data.numExp
             numBlocksKeepSampling, ...
             useOverlapSampling);
 
-        [idxKeepTrain, sampler] = sampler.selectBlocksFromRegressor(Xe, Ye);
-        
+        [idxKeepTrain, ~] = sampler.selectBlocksFromRegressor(Xe, Ye);
         idxKeepPerExp{e} = idxKeepTrain;
 
         Xe = Xe(idxKeepTrain,:);
@@ -137,6 +134,7 @@ for e = 1:data.numExp
     Xtr = [Xtr; Xe];
     Ytr = [Ytr; Ye];
 end
+
 plot_selected_experiment_regions_io(data, idxKeepPerExp, idxAllPerExp);
 
 fprintf('\n=== Multi-experiment training set summary ===\n');
@@ -147,68 +145,9 @@ fprintf('Keep ratio                              : %.2f %%\n', ...
     100 * numTrainRowsAfterSampling / numTrainRowsBeforeSampling);
 
 %% =========================
-% Build test regressors from one selected validation experiment
-%% =========================
-if valExpForTest < 1 || valExpForTest > data.numExp
-    error('valExpForTest is out of range.');
-end
-
-t         = data.tCell{valExpForTest};
-uRaw      = data.uCell{valExpForTest};
-yRaw      = data.yCell{valExpForTest};
-
-uValRaw   = data.uValCell{valExpForTest};
-yValRaw   = data.yValCell{valExpForTest};
-idxValRaw = data.idxValCell{valExpForTest};
-
-if isvector(uRaw),    uRaw = uRaw(:); end
-if isvector(yRaw),    yRaw = yRaw(:); end
-if isvector(uValRaw), uValRaw = uValRaw(:); end
-if isvector(yValRaw), yValRaw = yValRaw(:); end
-
-N = size(yRaw,1);
-
-% Preprocess full sequence for rollout/history usage
-u = uRaw;
-y = yRaw;
-
-if usePreprocessing
-    frameNow = min(sgolayFrame_y, N);
-    if mod(frameNow,2) == 0
-        frameNow = frameNow - 1;
-    end
-    if frameNow < 3
-        error('Savitzky-Golay frame length for output is too short.');
-    end
-
-    for j = 1:ny
-        y(:,j) = smoothdata(yRaw(:,j), 'sgolay', frameNow);
-    end
-end
-
-% Build regressors from full selected experiment
-[XallTestExp, YallTestExp, idxAllTestExp] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
-
-% Select validation/test rows only
-testMask = ismember(idxAllTestExp, idxValRaw);
-
-Xte   = XallTestExp(testMask,:);
-Yte   = YallTestExp(testMask,:);   % Possibly preprocessed target
-idxTe = idxAllTestExp(testMask);
-
-if isempty(idxTe)
-    error('Test set is empty.');
-end
-
-% Raw targets for final evaluation and plotting
-YteRaw = yRaw(idxTe,:);
-
-%% =========================
 % Normalize
 %% =========================
 [XtrN, muX, stdX] = normalize_data(Xtr);
-XteN = apply_normalization(Xte, muX, stdX);
-
 [YtrN, muY, stdY] = normalize_data(Ytr);
 
 %% =========================
@@ -228,9 +167,6 @@ D = size(XtrN,2);
 hypOpt   = cell(ny,1);
 postCell = cell(ny,1);
 
-muTeN = zeros(size(XteN,1), ny);
-s2TeN = zeros(size(XteN,1), ny);
-
 for j = 1:ny
     hyp = struct();
     hyp.mean = [];
@@ -238,111 +174,218 @@ for j = 1:ny
     hyp.lik  = log(0.1);
 
     % Hyperparameter optimization
-    hypOpt{j} = minimize(hyp, @gp, -200, ...
-        inffunc, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));
+    evalc('hypOpt{j} = minimize(hyp, @gp, -200, inffunc, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));');
 
     % Posterior for fast prediction
     [postCell{j}, ~, ~] = infGaussLik( ...
         hypOpt{j}, meanfunc, covfunc, likfunc, XtrN, YtrN(:,j));
-
-    % One-step prediction on test regressors
-    [muTeN(:,j), s2TeN(:,j)] = gpml_predict_mean_var_exact( ...
-        hypOpt{j}, meanfunc, covfunc, XtrN, XteN, postCell{j});
 end
 
-muTe = muTeN .* stdY + muY;
-s2Te = s2TeN .* (stdY.^2);
-
 %% =========================
-% Free-run simulation
-% Rollout uses selected validation experiment only
+% Test ALL experiments
 %% =========================
-disp("Free-run simulation starts...")
-tFreeRunStart = tic;
+rmse1_all        = zeros(data.numExp,1);
+fit1_all         = zeros(data.numExp,1);
+rmseFree_all     = zeros(data.numExp,1);
+fitFree_all      = zeros(data.numExp,1);
 
-yHatFree = nan(size(Yte));   % Predicted output on original output scale
-testStartOriginalIndex = idxTe(1);
+rmse1_each_all    = zeros(data.numExp, ny);
+fit1_each_all     = zeros(data.numExp, ny);
+rmseFree_each_all = zeros(data.numExp, ny);
+fitFree_each_all  = zeros(data.numExp, ny);
 
-for n = 1:size(Yte,1)
-    kOrig = idxTe(n);
+freeRunTime_all   = zeros(data.numExp,1);
 
-    xNow = build_single_mimo_regressor_for_rollout( ...
-        kOrig, testStartOriginalIndex, y, u, yHatFree, ...
-        naMat, nbMat, nkMat);
+muTe_cell     = cell(data.numExp,1);
+s2Te_cell     = cell(data.numExp,1);
+yHatFree_cell = cell(data.numExp,1);
+YteRaw_cell   = cell(data.numExp,1);
+tTe_cell      = cell(data.numExp,1);
 
-    xNowN = apply_normalization(xNow, muX, stdX);
+for eTest = 1:data.numExp
+    fprintf('\n==================================================\n');
+    fprintf('Testing experiment %d / %d\n', eTest, data.numExp);
+    fprintf('==================================================\n');
+
+    %% ---------------------------------
+    % Build test regressors from experiment eTest
+    %% ---------------------------------
+    t         = data.tCell{eTest};
+    uRaw      = data.uCell{eTest};
+    yRaw      = data.yCell{eTest};
+
+    idxValRaw = data.idxValCell{eTest};
+
+    if isvector(uRaw), uRaw = uRaw(:); end
+    if isvector(yRaw), yRaw = yRaw(:); end
+
+    N = size(yRaw,1);
+
+    % Preprocess full sequence for rollout/history usage
+    u = uRaw;
+    y = yRaw;
+
+    if usePreprocessing
+        frameNow = min(sgolayFrame_y, N);
+        if mod(frameNow,2) == 0
+            frameNow = frameNow - 1;
+        end
+        if frameNow < 3
+            error('Savitzky-Golay frame length for output is too short.');
+        end
+
+        for j = 1:ny
+            y(:,j) = smoothdata(yRaw(:,j), 'sgolay', frameNow);
+        end
+    end
+
+    % Build regressors from full selected experiment
+    [XallTestExp, YallTestExp, idxAllTestExp] = build_mimo_narx_regressors(y, u, naMat, nbMat, nkMat);
+
+    % Select validation/test rows only
+    testMask = ismember(idxAllTestExp, idxValRaw);
+
+    Xte   = XallTestExp(testMask,:);
+    Yte   = YallTestExp(testMask,:);   % Possibly preprocessed target
+    idxTe = idxAllTestExp(testMask);
+
+    if isempty(idxTe)
+        error('Test set is empty for experiment %d.', eTest);
+    end
+
+    % Raw targets for final evaluation and plotting
+    YteRaw = yRaw(idxTe,:);
+    XteN   = apply_normalization(Xte, muX, stdX);
+
+    %% ---------------------------------
+    % One-step prediction
+    %% ---------------------------------
+    muTeN = zeros(size(XteN,1), ny);
+    s2TeN = zeros(size(XteN,1), ny);
 
     for j = 1:ny
-        muNowN = gpml_predict_mean_exact_single( ...
-            hypOpt{j}, meanfunc, covfunc, XtrN, xNowN, postCell{j});
-
-        yHatFree(n,j) = muNowN * stdY(j) + muY(j);
+        [muTeN(:,j), s2TeN(:,j)] = gpml_predict_mean_var_exact( ...
+            hypOpt{j}, meanfunc, covfunc, XtrN, XteN, postCell{j});
     end
+
+    muTe = muTeN .* stdY + muY;
+    s2Te = s2TeN .* (stdY.^2);
+
+    %% ---------------------------------
+    % Free-run simulation
+    %% ---------------------------------
+    disp("Free-run simulation starts...")
+    tFreeRunStart = tic;
+
+    yHatFree = nan(size(Yte));   % Predicted output on original output scale
+    testStartOriginalIndex = idxTe(1);
+
+    for n = 1:size(Yte,1)
+        kOrig = idxTe(n);
+
+        xNow = build_single_mimo_regressor_for_rollout( ...
+            kOrig, testStartOriginalIndex, y, u, yHatFree, ...
+            naMat, nbMat, nkMat);
+
+        xNowN = apply_normalization(xNow, muX, stdX);
+
+        for j = 1:ny
+            muNowN = gpml_predict_mean_exact_single( ...
+                hypOpt{j}, meanfunc, covfunc, XtrN, xNowN, postCell{j});
+
+            yHatFree(n,j) = muNowN * stdY(j) + muY(j);
+        end
+    end
+
+    freeRunTime_all(eTest) = toc(tFreeRunStart);
+    fprintf('Free-run simulation runtime (exp %d): %.6f seconds\n', ...
+        eTest, freeRunTime_all(eTest));
+
+    %% ---------------------------------
+    % Metrics against RAW outputs
+    %% ---------------------------------
+    metrics = compute_prediction_metrics(YteRaw, muTe, yHatFree);
+
+    rmse1_each_all(eTest,:)    = metrics.rmse1_each(:).';
+    fit1_each_all(eTest,:)     = metrics.fit1_each(:).';
+    rmseFree_each_all(eTest,:) = metrics.rmseFree_each(:).';
+    fitFree_each_all(eTest,:)  = metrics.fitFree_each(:).';
+
+    rmse1_all(eTest)    = metrics.rmse1;
+    fit1_all(eTest)     = metrics.fit1;
+    rmseFree_all(eTest) = metrics.rmseFree;
+    fitFree_all(eTest)  = metrics.fitFree;
+
+    %% ---------------------------------
+    % Store for plotting
+    %% ---------------------------------
+    muTe_cell{eTest}     = muTe;
+    s2Te_cell{eTest}     = s2Te;
+    yHatFree_cell{eTest} = yHatFree;
+    YteRaw_cell{eTest}   = YteRaw;
+    tTe_cell{eTest}      = t(idxTe);
+
+    %% ---------------------------------
+    % Per-experiment quick print
+    %% ---------------------------------
+    fprintf('Exp %d one-step RMSE    : %.6f\n', eTest, rmse1_all(eTest));
+    fprintf('Exp %d one-step FIT     : %.6f\n', eTest, fit1_all(eTest));
+    fprintf('Exp %d free-run RMSE    : %.6f\n', eTest, rmseFree_all(eTest));
+    fprintf('Exp %d free-run FIT     : %.6f\n', eTest, fitFree_all(eTest));
+
+    %% ---------------------------------
+    % Per-experiment plots
+    %% ---------------------------------
+    if usePreprocessing
+        algoName = sprintf('GP-NARX multi-exp (%d exp, test exp %d, y-only Savitzky-Golay)', ...
+            data.numExp, eTest);
+    else
+        algoName = sprintf('GP-NARX multi-exp (%d exp, test exp %d)', ...
+            data.numExp, eTest);
+    end
+
+    plot_measured_outputs(t, yRaw, sprintf('%s - Exp %d', modelName, eTest));
+
+    plot_gp_prediction_with_band( ...
+        t(idxTe), YteRaw, muTe, s2Te, ...
+        metrics.rmse1_each, metrics.fit1_each, ...
+        sprintf('%s - Exp %d', modelName, eTest), algoName, ...
+        sprintf('One-step prediction (Exp %d, evaluated on raw output)', eTest));
+
+    plot_estimation_result( ...
+        t(idxTe), YteRaw, yHatFree, ...
+        metrics.rmseFree_each, metrics.fitFree_each, ...
+        sprintf('%s - Exp %d', modelName, eTest), algoName, ...
+        sprintf('Free-run simulation (Exp %d, evaluated on raw output)', eTest), ...
+        'free-run', ...
+        'b--');
+
+    plot_estimation_errors( ...
+        t(idxTe), YteRaw, muTe, yHatFree, ...
+        sprintf('%s - Exp %d', modelName, eTest), algoName);
 end
 
-tFreeRunElapsed = toc(tFreeRunStart);
-fprintf('Free-run simulation runtime: %.6f seconds\n', tFreeRunElapsed);
+%% =========================
+% Aggregate summary over all experiments
+%% =========================
+rmse1    = mean(rmse1_all);
+fit1     = mean(fit1_all);
+rmseFree = mean(rmseFree_all);
+fitFree  = mean(fitFree_all);
 
-%% =========================
-% Metrics against RAW outputs
-%% =========================
-metrics = compute_prediction_metrics(YteRaw, muTe, yHatFree);
+rmse1_each    = mean(rmse1_each_all, 1);
+fit1_each     = mean(fit1_each_all, 1);
+rmseFree_each = mean(rmseFree_each_all, 1);
+fitFree_each  = mean(fitFree_each_all, 1);
 
-rmse1_each    = metrics.rmse1_each;
-fit1_each     = metrics.fit1_each;
-rmseFree_each = metrics.rmseFree_each;
-fitFree_each  = metrics.fitFree_each;
-
-rmse1    = metrics.rmse1;
-fit1     = metrics.fit1;
-rmseFree = metrics.rmseFree;
-fitFree  = metrics.fitFree;
-
-%% =========================
-% Validation time
-%% =========================
-tTe = t(idxTe);
-
-if usePreprocessing
-    algoName = sprintf('GP-NARX multi-exp (%d exp, test exp %d, y-only Savitzky-Golay)', ...
-        data.numExp, valExpForTest);
-else
-    algoName = sprintf('GP-NARX multi-exp (%d exp, test exp %d)', ...
-        data.numExp, valExpForTest);
-end
-
-%% =========================
-% Plot measured outputs
-%% =========================
-if usePreprocessing
-    plot_measured_outputs_with_preprocessed(t, yRaw, y, modelName);
-else
-    plot_measured_outputs(t, yRaw, modelName);
-end
-
-%% =========================
-% Plot one-step prediction with raw target
-%% =========================
-plot_gp_prediction_with_band( ...
-    tTe, YteRaw, muTe, s2Te, ...
-    rmse1_each, fit1_each, ...
-    modelName, algoName, 'One-step prediction (evaluated on raw output)');
-
-%% =========================
-% Plot free-run simulation with raw target
-%% =========================
-plot_estimation_result( ...
-    tTe, YteRaw, yHatFree, ...
-    rmseFree_each, fitFree_each, ...
-    modelName, algoName, ...
-    'Free-run simulation (evaluated on raw output)', ...
-    'free-run', ...
-    'b--');
-
-%% =========================
-% Plot errors against raw target
-%% =========================
-plot_estimation_errors(tTe, YteRaw, muTe, yHatFree, modelName, algoName);
+fprintf('\n==================================================\n');
+fprintf('Average performance over ALL experiments\n');
+fprintf('==================================================\n');
+fprintf('Average one-step RMSE : %.6f\n', rmse1);
+fprintf('Average one-step FIT  : %.6f\n', fit1);
+fprintf('Average free-run RMSE : %.6f\n', rmseFree);
+fprintf('Average free-run FIT  : %.6f\n', fitFree);
+fprintf('Average free-run time : %.6f seconds\n', mean(freeRunTime_all));
 
 %% =========================
 % Print summary
@@ -356,7 +399,7 @@ end
 if usePreprocessing
     extraInfo = sprintf(['Regressor dimension : %d\n' ...
                          'Number of experiments: %d\n' ...
-                         'Test experiment idx : %d\n' ...
+                         'Test experiments    : all\n' ...
                          'Input preprocessing : none\n' ...
                          'Output preprocessing: Savitzky-Golay\n' ...
                          'SG frame (output)   : %d\n' ...
@@ -366,16 +409,18 @@ if usePreprocessing
                          'Sampling #blocks    : %d\n' ...
                          'Train rows before   : %d\n' ...
                          'Train rows after    : %d\n' ...
+                         'Avg free-run time   : %.6f s\n' ...
                          'Metrics target      : raw output'], ...
-                         size(Xtr,2), data.numExp, valExpForTest, ...
+                         size(Xtr,2), data.numExp, ...
                          sgolayFrame_y, ...
                          samplingFlagStr, ...
                          blockLenSampling, numBlocksKeepSampling, ...
-                         numTrainRowsBeforeSampling, numTrainRowsAfterSampling);
+                         numTrainRowsBeforeSampling, numTrainRowsAfterSampling, ...
+                         mean(freeRunTime_all));
 else
     extraInfo = sprintf(['Regressor dimension : %d\n' ...
                          'Number of experiments: %d\n' ...
-                         'Test experiment idx : %d\n' ...
+                         'Test experiments    : all\n' ...
                          'Input preprocessing : none\n' ...
                          'Output preprocessing: none\n' ...
                          'Prediction mode     : cached posterior mean/var\n' ...
@@ -384,17 +429,23 @@ else
                          'Sampling #blocks    : %d\n' ...
                          'Train rows before   : %d\n' ...
                          'Train rows after    : %d\n' ...
+                         'Avg free-run time   : %.6f s\n' ...
                          'Metrics target      : raw output'], ...
-                         size(Xtr,2), data.numExp, valExpForTest, ...
+                         size(Xtr,2), data.numExp, ...
                          samplingFlagStr, ...
                          blockLenSampling, numBlocksKeepSampling, ...
-                         numTrainRowsBeforeSampling, numTrainRowsAfterSampling);
+                         numTrainRowsBeforeSampling, numTrainRowsAfterSampling, ...
+                         mean(freeRunTime_all));
+end
+
+if usePreprocessing
+    algoNameSummary = sprintf('GP-NARX multi-exp (%d exp, all test exp, y-only Savitzky-Golay)', data.numExp);
+else
+    algoNameSummary = sprintf('GP-NARX multi-exp (%d exp, all test exp)', data.numExp);
 end
 
 print_sysid_summary( ...
-    modelName, algoName, nu, ny, ...
-    rmse1, fit1, rmseFree, fitFree, ...
-    rmse1_each, fit1_each, rmseFree_each, fitFree_each, ...
+    modelName, algoNameSummary, nu, ny, ...
     extraInfo);
 
 %% Remove path
