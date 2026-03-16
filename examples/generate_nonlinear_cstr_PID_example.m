@@ -67,9 +67,9 @@ function data = generate_nonlinear_cstr_PID_example()
     %% Step references for outputs [CA, T, CB]
     r = zeros(N,3);
     changeTimes = [0 10 20 30 40 50];
-    r(:,1) = make_step_profile(t, changeTimes, [0.80 0.65 0.90 0.70 0.85 0.75]);
+    r(:,1) = make_step_profile(t, changeTimes, [0.80 -0.65 -0.90 -0.70 0.85 0.75]);
     r(:,2) = make_step_profile(t, changeTimes, [350 360 345 370 355 365]);
-    r(:,3) = make_step_profile(t, changeTimes, [0.15 0.25 0.10 0.30 0.18 0.22]);
+    r(:,3) = make_step_profile(t, changeTimes, [0.15 -0.25 -0.10 -0.30 0.18 0.22]);
 
     %% Dimensions
     nx = 3;
