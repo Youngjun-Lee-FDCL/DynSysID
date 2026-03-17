@@ -33,8 +33,33 @@ The pipeline consists of the following steps:
    - One-step-ahead prediction (standard)
    - Free-run simulation (rollout)
 
+### Example: Nonlinear Aircraft PID Tracking
+
+The dataset is generated from a nonlinear 6-state aircraft-like model controlled by PID loops.
+
+- 3 outputs: pitch, roll, yaw rate  
+- 4 inputs: control surfaces + throttle  
+- Includes actuator saturation and process/measurement noise  
+
+#### Reference tracking
+The controller tracks piecewise-constant references with moderate nonlinear coupling.
+
+#### Control inputs
+Actuator signals show saturation and cross-coupling effects.
+
+#### Why this dataset?
+This example provides:
+- Strong nonlinearity
+- Multi-input multi-output coupling
+- Realistic control-driven dynamics
+
+![result](images/result_aircraft.png)
+
 ---
 
-## 🔹 Key Idea: Free-Run Simulation
+## 🚧 Status
 
-In free-run mode, the model recursively feeds its own predictions:
+- GP-NARX: Stable and fully functional
+- VGP-SSM: Under development (not fully validated yet)
+> ⚠️ VGP-SSM is currently under development. Results may be unstable.
+
