@@ -1,6 +1,6 @@
 function plot_gp_prediction_with_band( ...
     tVal, yTrue, yPred, yVar, rmse_each, fit_each, ...
-    modelName, algoName, figLabel)
+    algoName)
 % Plot GP prediction with 95% uncertainty band.
 %
 % Inputs:
@@ -31,10 +31,10 @@ function plot_gp_prediction_with_band( ...
         grid on;
         xlabel('Time (s)');
         ylabel(sprintf('y_%d', j));
-        legend('95% band', 'True', [algoName, ' one-step'], 'Location', 'best');
+        legend('95% band', 'True', ['GP-NARX', ' one-step'], 'Location', 'best');
         title(sprintf('One-step | y_%d | RMSE = %.4f | FIT = %.2f%%', ...
             j, rmse_each(j), fit_each(j)));
     end
 
-    sgtitle([modelName, ' | ', algoName, ' | ', figLabel]);
+    sgtitle(algoName);
 end

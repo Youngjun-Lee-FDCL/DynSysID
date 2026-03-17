@@ -24,10 +24,10 @@ function data = generate_frigola_benchmark_example(numExp)
 
     %% Nominal parameters
     a0 = 0.5;
-    b0 = 25;
+    b0 = 0.2;
     c0 = 8;
     d0 = 0.05;
-    q0 = 0.001;
+    q0 = 0;
     r0 = 0.001;
 
     %% Simulation settings
@@ -37,7 +37,7 @@ function data = generate_frigola_benchmark_example(numExp)
 
     %% NARX settings
     na = 15;
-    nb = 15;
+    nb = 20;
     nk = 1;
 
     %% Preallocate cell arrays

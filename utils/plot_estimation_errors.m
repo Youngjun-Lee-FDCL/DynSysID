@@ -1,4 +1,4 @@
-function plot_estimation_errors(tVal, yTrue, yPred, ySim, modelName, algoName)
+function plot_estimation_errors(tVal, yTrue, yPred, ySim, algoName)
 % Plot one-step and free-run errors.
 
     ny = size(yTrue, 2);
@@ -19,5 +19,5 @@ function plot_estimation_errors(tVal, yTrue, yPred, ySim, modelName, algoName)
         ylabel(sprintf('e_{free,%d}', j));
         title(sprintf('Free-run error | y_%d', j));
     end
-    sgtitle([modelName, ' | ', algoName, ' | Error plots']);
+    sgtitle(algoName);
 end

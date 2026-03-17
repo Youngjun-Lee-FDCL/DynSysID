@@ -1,6 +1,6 @@
 function plot_estimation_result( ...
     tVal, yTrue, yHat, rmse_each, fit_each, ...
-    modelName, algoName, figLabel, lineLabel, lineSpec)
+    algoName, lineLabel, lineSpec)
 % Plot one-step or free-run result.
 
     ny = size(yTrue, 2);
@@ -13,9 +13,9 @@ function plot_estimation_result( ...
         grid on;
         xlabel('Time (s)');
         ylabel(sprintf('y_%d', j));
-        legend('True', [algoName, ' ', lower(lineLabel)], 'Location', 'best');
+        legend('True', ['GP-NARX', ' ', lower(lineLabel)], 'Location', 'best');
         title(sprintf('%s | y_%d | RMSE = %.4f | FIT = %.2f%%', ...
             lineLabel, j, rmse_each(j), fit_each(j)));
     end
-    sgtitle([modelName, ' | ', algoName, ' | ', figLabel]);
+    sgtitle(algoName);
 end
