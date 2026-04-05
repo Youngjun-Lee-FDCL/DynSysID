@@ -17,9 +17,10 @@ rng(1);
 % exampleFcn = @generate_toy_nonlinear_example;
 % exampleFcn = @generate_nonlinear_twotank_example;
 % exampleFcn = @generate_linear_mimo3_example;
-% exampleFcn = @generate_nonlinear_cstr_PID_example;
-exampleFcn = @generate_nonlinear_aircraft43_PID_example;
+exampleFcn = @generate_nonlinear_cstr_PID_example;
+% exampleFcn = @generate_nonlinear_aircraft43_PID_example;
 % exampleFcn = @generate_vgpssm_easy_example;
+% exampleFcn = @generate_linear_msd_pid_disturbance_example;
 
 % Dataset sizes
 numExp       = 5;    % training / held-out validation experiments

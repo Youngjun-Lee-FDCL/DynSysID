@@ -447,7 +447,7 @@ classdef SMCSmoother
                 xNext = traj(:,t+1);           % [nx x 1]
 
                 logBw = log(weights(:,t) + realmin) + ...
-                    reshape(model.logTransitionPdf(xNext, xCurr), [], 1);
+                    reshape(model.logTransitionPdf(xNext, xCurr, t), [], 1);
 
                 bw = obj.normalizeLogWeights(logBw);
                 idx = obj.sampleCategorical(bw);

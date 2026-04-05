@@ -1,3 +1,4 @@
+
 function data = generate_toy_nonlinear_example()
 % Generate GP-NARX training/test data for the original toy nonlinear example
 %
